@@ -36,32 +36,28 @@ def explain_flag(row: pd.Series, pattern: str) -> dict:
         "recommended_action": data.get("recommended_action", "review"),
     }
 def answer_aggregate_query(features_df: pd.DataFrame, parsed: ParsedQuery) -> dict:
-    """
-    Filter features_df by the numeric thresholds extracted from the query
-    and return matching customers. Straight pandas filtering — no LLM needed
-    for a pure counting/threshold question.
-    """
     df = features_df.copy()
 
-    if parsed.min_transaction_count is not None and "transaction_count" in df.columns:
-        df = df[df["transaction_count"] >= parsed.min_transaction_count]
+    if parsed.min_transaction_count is not None and "tx_count_total" in df.columns:
+        df = df[df["tx_count_total"] >= parsed.min_transaction_count]
 
-    if parsed.amount_threshold is not None and "avg_transaction_amount" in df.columns:
-        df = df[df["avg_transaction_amount"] < parsed.amount_threshold]
+    if parsed.amount_threshold is not None and "avg_amount" in df.columns:
+        df = df[df["avg_amount"] < parsed.amount_threshold]
 
-    matching_customers = (
-        df["customer_id"].tolist() if "customer_id" in df.columns else df.index.tolist()
-    )
+    matching_customers = df["customer_id"].unique().tolist() if "customer_id" in df.columns else []
     return {"matching_customers": matching_customers, "count": len(matching_customers)}
 def build_response(context: dict) -> dict:
-    parsed: ParsedQuery = context["parsed_query"]
+    if "error" in context:
+        return {"error": context["error"]}
 
+    parsed: ParsedQuery = context["parsed_query"]
     execution_summary = {
         "query_intent": parsed.intent,
         "detected_pattern": parsed.target_pattern,
         "filters_applied": parsed.filters,
         "tools_invoked": context["plan_used"],
     }
+
 
     flagged_items = []
     aggregate_result = None

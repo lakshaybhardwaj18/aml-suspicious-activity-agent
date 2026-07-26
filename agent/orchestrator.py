@@ -88,18 +88,20 @@ def build_plan(parsed: ParsedQuery) -> list[str]:
     return ["run_eda", "engineer_features", "detect_anomalies", "classify_risk"]
 
 def execute_plan(plan: list[str], df: pd.DataFrame, parsed: ParsedQuery) -> dict:
-    """
-    Run each tool in the plan, passing results forward.
-    Imports are local so this file doesn't crash if a teammate's tool
-    isn't written yet — you can stub-test the orchestrator independently.
-    """
     from tools import eda, feature_engineering, anomaly_detection, risk_classification
-    context = {"raw_df": df, "filters": parsed.filters}
+
+    working_df = df
+    if parsed.entity_id:
+        working_df = df[df["customer_id"] == parsed.entity_id]
+        if working_df.empty:
+            return {"error": f"No customer found with ID {parsed.entity_id}"}
+
+    context = {"raw_df": working_df, "filters": parsed.filters}
     if "run_eda" in plan:
-        context["eda_summary"] = eda.run_eda(df, parsed.filters)
+        context["eda_summary"] = eda.run_eda(working_df, parsed.filters)
     if "engineer_features" in plan:
         context["features_df"] = feature_engineering.engineer_features(
-            df, parsed.filters, parsed.target_pattern
+            working_df, parsed.filters, parsed.target_pattern
         )
     if "detect_anomalies" in plan:
         context["scored_df"] = anomaly_detection.detect_anomalies(
@@ -117,3 +119,8 @@ def run_agent(query: str, df: pd.DataFrame) -> dict:
     context["parsed_query"] = parsed
     context["plan_used"] = plan
     return context
+def handle_query(query: str, df: pd.DataFrame) -> dict:
+    """Single entry point: raw query + dataset in, final response out."""
+    from agent.explainer import build_response
+    context = run_agent(query, df)
+    return build_response(context)
