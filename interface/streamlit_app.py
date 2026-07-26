@@ -59,6 +59,9 @@ if st.button("Run", type="primary") and query:
         c4.metric("Filters", len(summary["filters_applied"]) or "none")
         st.caption(f"Tools: {' → '.join(summary['tools_invoked']) or 'none'}")
 
+        if result.get("message"):
+            st.info(safe_text(result["message"]))
+
         
         if result.get("aggregate_result"):
             agg = result["aggregate_result"]

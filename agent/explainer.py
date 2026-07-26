@@ -99,6 +99,26 @@ def build_response(context: dict) -> dict:
         "tools_invoked": context["plan_used"],
     }
 
+    if parsed.intent == "general":
+        # Chitchat / meta question -- no tools were run (see build_plan),
+        # so just explain what this agent does instead of returning nothing.
+        message = (
+            "I'm an AML detection agent. I can find suspicious transaction "
+            "patterns (structuring, smurfing, layering), look up a specific "
+            "customer, rank customers by risk, or answer counting/threshold "
+            "questions about the transaction data. Try one of the example "
+            "queries above, or ask me something like \"Is customer C00205 "
+            "suspicious?\" or \"Find structuring patterns in the last 30 days\"."
+        )
+        return {
+            "execution_summary": execution_summary,
+            "flagged_items": [],
+            "aggregate_result": None,
+            "ranked_customers": None,
+            "note": None,
+            "message": message,
+        }
+
     flagged_items = []
     aggregate_result = None
     ranked_customers = None
@@ -134,4 +154,5 @@ def build_response(context: dict) -> dict:
         "aggregate_result": aggregate_result,
         "ranked_customers": ranked_customers,
         "note": note,
+        "message": None,
     }

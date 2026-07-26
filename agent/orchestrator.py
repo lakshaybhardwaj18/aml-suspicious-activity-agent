@@ -91,7 +91,12 @@ def build_plan(parsed: ParsedQuery) -> list[str]:
         if parsed.target_pattern:
             return ["engineer_features", "detect_anomalies", "classify_risk"]
         return ["run_eda", "engineer_features", "detect_anomalies", "classify_risk"]
-    # Fallback: run everything
+    if parsed.intent == "general":
+        # Chitchat / meta questions ("who are you?", "what can you do?") need
+        # no tools at all -- explainer.py returns a canned response for these.
+        return []
+    # Fallback for anything the LLM mis-labels outside the known intents:
+    # run everything so we at least surface something useful.
     return ["run_eda", "engineer_features", "detect_anomalies", "classify_risk"]
 def _classify_risk(df: pd.DataFrame) -> pd.DataFrame:
     """Bucket final_score into low/medium/high — same thresholds as reporting.py's
