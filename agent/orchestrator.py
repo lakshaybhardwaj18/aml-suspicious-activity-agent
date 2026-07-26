@@ -18,48 +18,51 @@ load_dotenv()
 from groq import Groq
 _client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
-def call_llm(prompt: str) -> str:
-    """Send a prompt to Groq and return raw text response."""
-    response = _client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},  # forces valid JSON output
-    )
-    return response.choices[0].message.content
-    raise NotImplementedError("Plug in your LLM client here")
+import time
+from groq import RateLimitError
+
+def call_llm(prompt: str, temperature: float = 0, model: str = "llama-3.3-70b-versatile", max_retries: int = 3) -> str:
+    for attempt in range(max_retries):
+        try:
+            response = _client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content
+        except RateLimitError as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 8 * (attempt + 1)  # 8s, 16s, 24s — enough to clear a TPM window
+            time.sleep(wait)
 @dataclass
 class ParsedQuery:
     intent: str
     target_pattern: Optional[str] = None
     filters: dict = field(default_factory=dict)
     entity_id: Optional[str] = None
-    min_transaction_count: Optional[int] = None   # NEW
-    amount_threshold: Optional[float] = None        # NEW
+    min_transaction_count: Optional[int] = None   
+    amount_threshold: Optional[float] = None      
+    requested_count: Optional[int] = None  
+    sort_direction: Optional[str] = None 
 
 INTENT_PROMPT = """You are parsing a query for an AML detection agent.
 Extract the following as JSON only, no extra text:
-- intent: one of ["detect_pattern", "lookup_customer", "aggregate", "general"]
+- intent: one of ["detect_pattern", "lookup_customer", "aggregate", "rank_customers", "general"]
 - target_pattern: one of ["structuring", "smurfing", "layering", null]
 - filters: object with any of date_range, country, transaction_type, segment
 - entity_id: a specific customer/transaction ID mentioned, or null
 - min_transaction_count: a minimum transaction count if mentioned, or null
 - amount_threshold: a dollar amount threshold if mentioned, or null
-
-IMPORTANT: Only set intent="detect_pattern" and a target_pattern if the user
-explicitly names or clearly asks to find a laundering pattern (e.g. "find
-structuring", "detect smurfing"). If the query is just a count/threshold
-question — even if it resembles a known pattern — classify it as "aggregate"
-and leave target_pattern null. The agent should not assume analytical intent
-the user didn't ask for.
-
-Example:
-Query: "Which customers made 10+ transactions under $10,000?"
-Output: {{"intent": "aggregate", "target_pattern": null, "filters": {{}}, "entity_id": null, "min_transaction_count": 10, "amount_threshold": 10000}}
+- requested_count: for rank_customers queries, how many customers were asked for (default 5)
+- sort_direction: "desc" for most/highest-risk/most suspicious customers,
+  "asc" for least/lowest-risk/safest/cleanest/not-suspicious customers.
+  Use "rank_customers" intent for BOTH directions — "find customers who are NOT
+  suspicious" is rank_customers with sort_direction="asc", not a different intent.
 
 Query: "{query}"
 """
-
 def parse_query(query: str) -> ParsedQuery:
     """Turn the raw user query into a structured ParsedQuery."""
     prompt = INTENT_PROMPT.format(query=query)
@@ -79,6 +82,10 @@ def build_plan(parsed: ParsedQuery) -> list[str]:
     if parsed.intent == "aggregate":
         # Simple counting/threshold query — no ML needed
         return ["engineer_features"]
+    if parsed.intent == "rank_customers":
+        # "Most suspicious customer" style queries: need full scoring,
+        # aggregated to customer level downstream in explainer.py
+        return ["engineer_features", "detect_anomalies", "classify_risk"]
     if parsed.intent == "detect_pattern":
         # Full flow, but skip EDA if a specific pattern is already named
         if parsed.target_pattern:

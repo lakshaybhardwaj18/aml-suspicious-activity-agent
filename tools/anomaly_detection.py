@@ -38,6 +38,29 @@ UNUSUAL_AMOUNT_ZSCORE = 2.0           # amount far from customer's own baseline
 VELOCITY_HIGH_PCTL = 0.99             # top 1% of money-velocity flagged
 
 
+# tools/anomaly_detection.py — add near the top
+_cached_model = None
+_cached_model_features = None
+
+def apply_isolation_forest(df, contamination=0.2):
+    global _cached_model, _cached_model_features
+    from sklearn.ensemble import IsolationForest
+
+    ml_features = ["amount", "tx_count_24h", "tx_count_7d", "rolling_sum_24h",
+                   "velocity_24h", "amount_deviation"]
+    ml_features = [c for c in ml_features if c in df.columns]
+    X = df[ml_features].fillna(0)
+
+    if _cached_model is None or _cached_model_features != ml_features:
+        _cached_model = IsolationForest(n_estimators=200, contamination=contamination, random_state=42)
+        _cached_model.fit(X)
+        _cached_model_features = ml_features
+
+    raw_scores = -_cached_model.decision_function(X)
+    df["ml_score"] = (raw_scores - raw_scores.min()) / (raw_scores.max() - raw_scores.min())
+    df["ml_flag"] = _cached_model.predict(X) == -1
+    return df
+
 def _flag_structuring(df: pd.DataFrame) -> pd.Series:
     """Single transaction just under the reporting threshold (empirically the
     primary signature in this dataset), OR a burst of transactions whose
