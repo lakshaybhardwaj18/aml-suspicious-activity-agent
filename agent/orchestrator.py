@@ -86,9 +86,23 @@ def build_plan(parsed: ParsedQuery) -> list[str]:
         return ["run_eda", "engineer_features", "detect_anomalies", "classify_risk"]
     # Fallback: run everything
     return ["run_eda", "engineer_features", "detect_anomalies", "classify_risk"]
+def _classify_risk(df: pd.DataFrame) -> pd.DataFrame:
+    """Bucket final_score into low/medium/high — same thresholds as reporting.py's
+    risk_bucket(), just reusable per-query instead of a batch script."""
+    df = df.copy()
+    def bucket(score):
+        if score >= 0.5:
+            return "high"
+        elif score >= 0.25:
+            return "medium"
+        return "low"
+    df["risk_level"] = df["final_score"].apply(bucket)
+    df["risk_score"] = df["final_score"]  # keep explainer.py's expected column name
+    return df
 
-def execute_plan(plan: list[str], df: pd.DataFrame, parsed: ParsedQuery) -> dict:
-    from tools import eda, feature_engineering, anomaly_detection, risk_classification
+
+def execute_plan(plan: list[str], df: pd.DataFrame, customers_df: pd.DataFrame, parsed: ParsedQuery) -> dict:
+    from tools import eda_tool, feature_engineering, anomaly_detection
 
     working_df = df
     if parsed.entity_id:
@@ -96,31 +110,38 @@ def execute_plan(plan: list[str], df: pd.DataFrame, parsed: ParsedQuery) -> dict
         if working_df.empty:
             return {"error": f"No customer found with ID {parsed.entity_id}"}
 
-    context = {"raw_df": working_df, "filters": parsed.filters}
-    if "run_eda" in plan:
-        context["eda_summary"] = eda.run_eda(working_df, parsed.filters)
-    if "engineer_features" in plan:
-        context["features_df"] = feature_engineering.engineer_features(
-            working_df, parsed.filters, parsed.target_pattern
-        )
-    if "detect_anomalies" in plan:
-        context["scored_df"] = anomaly_detection.detect_anomalies(
-            context["features_df"], parsed.target_pattern
-        )
-    if "classify_risk" in plan:
-        context["risk_df"] = risk_classification.classify_risk(context["scored_df"])
-    return context
+    # Translate your filter keys to theirs
+    tool_filters = {
+        "start_date": parsed.filters.get("date_from"),
+        "end_date": parsed.filters.get("date_to"),
+        "country": parsed.filters.get("country"),
+        "transaction_type": parsed.filters.get("transaction_type"),
+    }
 
-def run_agent(query: str, df: pd.DataFrame) -> dict:
-    """Entry point: takes a raw user query + dataset, returns full context for explainer.py"""
+    context = {"raw_df": working_df, "filters": parsed.filters}
+
+    if "run_eda" in plan:
+        context["eda_summary"] = eda_tool.run_eda(working_df, customers_df, tool_filters)
+
+    if "engineer_features" in plan:
+        scoped = eda_tool.apply_filters(working_df, tool_filters)
+        context["features_df"] = feature_engineering.engineer_features(scoped, customers_df)
+
+    if "detect_anomalies" in plan:
+        context["scored_df"] = anomaly_detection.detect_anomalies(context["features_df"], use_ml=True)
+
+    if "classify_risk" in plan:
+        context["risk_df"] = _classify_risk(context["scored_df"])
+
+    return context
+def run_agent(query: str, df: pd.DataFrame, customers_df: pd.DataFrame = None) -> dict:
     parsed = parse_query(query)
     plan = build_plan(parsed)
-    context = execute_plan(plan, df, parsed)
+    context = execute_plan(plan, df, customers_df, parsed)
     context["parsed_query"] = parsed
     context["plan_used"] = plan
     return context
-def handle_query(query: str, df: pd.DataFrame) -> dict:
-    """Single entry point: raw query + dataset in, final response out."""
+def handle_query(query: str, df: pd.DataFrame, customers_df: pd.DataFrame = None) -> dict:
     from agent.explainer import build_response
-    context = run_agent(query, df)
+    context = run_agent(query, df, customers_df)
     return build_response(context)
